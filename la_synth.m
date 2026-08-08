@@ -1,94 +1,89 @@
-% ================================================================
-% LA Synthesis: Data-Matched Guitar Pluck
-% ================================================================
-pkg load signal;
+function [attackWave, synthTail, finalAudio, Fs] = processLASynth(wavFilePath, trimTime, baseFreq, laMixLevel, A, D, S, R)
 
-% 1. LOAD THE SAMPLE
-[rawSample, Fs] = audioread('guitar_attack.wav');
+    if nargin < 5
+        A = 0.01;
+        D = 2.60;
+        S = 0.00;
+        R = 0.50;
+    end
 
-% Downmix to mono and ensure it is a row vector
-if size(rawSample, 2) > 1
-    rawSample = mean(rawSample, 2);
-end
-rawSample = rawSample(:)';
+    [rawSample, Fs] = audioread(wavFilePath);
+    if size(rawSample, 2) > 1
+        rawSample = mean(rawSample, 2);
+    end
+    rawSample = rawSample(:)';
 
-% 2. AUTOMATIC PITCH DETECTION
-[r, lags] = xcorr(rawSample, 'coeff');
-r = r(lags > 0);
-lags = lags(lags > 0);
+    attackSamples = min(round(trimTime * Fs), length(rawSample));
+    attackWave = rawSample(1:attackSamples);
 
-minLag = round(Fs / 1000);
-maxLag = round(Fs / 70);
-[~, peakLoc] = max(r(minLag:maxLag));
-truePeakLoc = peakLoc + minLag - 1;
+    tailDuration = 4.0;
+    t = (0 : round(tailDuration * Fs) - 1) / Fs;
 
-freq = Fs / truePeakLoc;
-fprintf('Detected sample pitch: %.2f Hz\n', freq);
+    rawSynth = zeros(1, length(t));
+    for k = 1:6
+        amplitude = 1 / (k^1.5);
+        rawSynth = rawSynth + amplitude * sin(2 * pi * k * baseFreq * t);
+    end
 
-% 3. ISOLATE THE ATTACK TRANSIENT
-% Capture past the 0.125s peak identified in the metrics
-attackDuration = 0.15;
-attackSamples = min(round(attackDuration * Fs), length(rawSample));
-attackWave = rawSample(1:attackSamples);
+    envelope = generateADSR(A, D, S, R, length(t), Fs);
+    synthTail = rawSynth .* envelope;
 
-% 4. SYNTHESIZE THE MATCHING TAIL
-tailDuration = 12.0; % Extended to match the physical decay time
-t = (0 : round(tailDuration * Fs) - 1) / Fs;
+    tailStartLevel = max(abs(attackWave(end-50:end)));
 
-% Additive synthesis with independent harmonic decay
-synthTail = zeros(1, length(t));
-baseTau = 2.6; % The fundamental frequency's decay time constant
+    maxTail = max(abs(synthTail));
+    if maxTail > 0
+        synthTail = synthTail * (tailStartLevel / maxTail) * laMixLevel;
+    end
 
-for k = 1:6
-    % Higher harmonics have lower amplitude (warmer tone)
-    amplitude = 1 / (k^1.5);
+    crossfadeTime = 0.02;
+    xfadeSamples = round(crossfadeTime * Fs);
 
-    % Higher harmonics decay much faster (mimics natural string dampening)
-    tau_k = baseTau / (k^1.2);
+    totalLength = length(attackWave) + length(synthTail) - xfadeSamples;
+    finalAudio = zeros(1, totalLength);
 
-    harmonic = amplitude * sin(2 * pi * k * freq * t) .* exp(-t / tau_k);
-    synthTail = synthTail + harmonic;
-end
+    finalAudio(1:length(attackWave)) = attackWave;
 
-% Match the volume of the synth to the exact end of the attack sample
-tailStartLevel = max(abs(attackWave(end-50:end)));
-synthTail = synthTail * (tailStartLevel / max(abs(synthTail)));
+    if xfadeSamples > 0 && length(attackWave) > xfadeSamples
+        fadeOut = linspace(1, 0, xfadeSamples);
+        fadeIn  = linspace(0, 1, xfadeSamples);
 
-% 5. CROSSFADE AND STITCH
-crossfadeTime = 0.02; % 20ms equal-power crossfade
-xfadeSamples = round(crossfadeTime * Fs);
+        xfadeStart = length(attackWave) - xfadeSamples + 1;
+        xfadeEnd   = length(attackWave);
 
-totalLength = length(attackWave) + length(synthTail) - xfadeSamples;
-finalAudio = zeros(1, totalLength);
+        finalAudio(xfadeStart:xfadeEnd) = (attackWave(xfadeStart:xfadeEnd) .* fadeOut) + ...
+                                          (synthTail(1:xfadeSamples) .* fadeIn);
+    end
 
-% Insert Attack
-finalAudio(1:length(attackWave)) = attackWave;
+    finalAudio(length(attackWave)+1:end) = synthTail(xfadeSamples+1:end);
 
-% Crossfade region
-if xfadeSamples > 0
-    fadeOut = linspace(1, 0, xfadeSamples);
-    fadeIn  = linspace(0, 1, xfadeSamples);
-
-    xfadeStart = length(attackWave) - xfadeSamples + 1;
-    xfadeEnd   = length(attackWave);
-
-    finalAudio(xfadeStart:xfadeEnd) = (attackWave(xfadeStart:xfadeEnd) .* fadeOut) + ...
-                                      (synthTail(1:xfadeSamples) .* fadeIn);
+    peakVol = max(abs(finalAudio));
+    if peakVol > 0
+        finalAudio = finalAudio / peakVol;
+    end
 end
 
-% Insert Tail
-finalAudio(length(attackWave)+1:end) = synthTail(xfadeSamples+1:end);
+function env = generateADSR(A, D, S, R, totalSamples, Fs)
+    a_samp = round(A * Fs);
+    d_samp = round(D * Fs);
+    r_samp = round(R * Fs);
 
-% 6. NORMALIZE & EXPORT
-finalAudio = finalAudio / max(abs(finalAudio));
-audiowrite('la_synth_matched_output.wav', finalAudio, Fs);
+    s_samp = totalSamples - a_samp - d_samp - r_samp;
 
-disp('Synthesis complete! Playing audio...');
-sound(finalAudio, Fs);
+    envA = linspace(0, 1, a_samp);
 
-% 7. VISUALIZE FOR CLASS
-figure;
-plot((0:length(finalAudio)-1)/Fs, finalAudio);
-title(sprintf('LA Synthesis (Matched perfectly at %.1f Hz)', freq));
-xlabel('Time (seconds)');
-ylabel('Amplitude');
+    tD = linspace(0, 5, d_samp);
+    envD = S + (1 - S) * exp(-tD);
+
+    envS = ones(1, max(0, s_samp)) * S;
+
+    tR = linspace(0, 5, r_samp);
+    envR = S * exp(-tR);
+
+    env = [envA, envD, envS, envR];
+
+    if length(env) > totalSamples
+        env = env(1:totalSamples);
+    elseif length(env) < totalSamples
+        env = [env, zeros(1, totalSamples - length(env))];
+    end
+end
