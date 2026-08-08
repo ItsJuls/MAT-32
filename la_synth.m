@@ -1,3 +1,53 @@
+% =========================================================================
+% APP DESIGNER UI INSTRUCTIONS (READ ME!)
+% =========================================================================
+% HEY! If you are building the App Designer (.mlapp) UI, here is what you
+% need to know to hook it up to this backend function.
+%
+% 1. UI COMPONENTS TO BUILD:
+%    Drag and drop these into the app and name them exactly like this:
+%    - 3x UIAxes: app.TopUIAxes, app.MiddleUIAxes, app.BottomUIAxes
+%    - 3x Knobs:
+%        * app.SAMPLETRIMKnob (Range: 0.01 to 0.50, Default: 0.15)
+%        * app.BASEFREQHzKnob (Range: 20 to 1000, Default: 110)
+%        * app.LAMIXKnob      (Range: 0.0 to 2.0, Default: 1.0)
+%    - 4x Vertical Sliders (ADSR):
+%        * app.ASlider (Range: 0.0 to 2.0, Default: 0.01)
+%        * app.DSlider (Range: 0.0 to 5.0, Default: 2.6)
+%        * app.SSlider (Range: 0.0 to 1.0, Default: 0.0)
+%        * app.RSlider (Range: 0.0 to 2.0, Default: 0.5)
+%    - 1x Button: Trigger Note
+%
+% 2. WHAT THIS FUNCTION RETURNS:
+%    When you call this function, it hands back 4 variables:
+%    - attackWave : The trimmed real audio (Plot this in TopUIAxes)
+%    - synthTail  : The math-generated ADSR wave (Plot this in MiddleUIAxes)
+%    - finalAudio : The combined crossfaded sound (Plot this in BottomUIAxes)
+%    - Fs         : The sample rate (Pass this into sound() so it plays)
+%
+% 3. THE CALLBACK CODE:
+%    Right-click your "Trigger Note" button, select Callbacks > Add,
+%    and paste this exact code inside the function it creates:
+%
+%    filePath = 'guitar_attack.wav';
+%    trim = app.SAMPLETRIMKnob.Value;
+%    freq = app.BASEFREQHzKnob.Value;
+%    mix  = app.LAMIXKnob.Value;
+%
+%    A = app.ASlider.Value;
+%    D = app.DSlider.Value;
+%    S = app.SSlider.Value;
+%    R = app.RSlider.Value;
+%
+%    [attack, tail, combined, Fs] = processLASynth(filePath, trim, freq, mix, A, D, S, R);
+%
+%    plot(app.TopUIAxes, attack);
+%    plot(app.MiddleUIAxes, tail);
+%    plot(app.BottomUIAxes, combined);
+%    sound(combined, Fs);
+%
+% =========================================================================
+
 function [attackWave, synthTail, finalAudio, Fs] = processLASynth(wavFilePath, trimTime, baseFreq, laMixLevel, A, D, S, R)
 
     if nargin < 5
