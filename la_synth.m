@@ -19,11 +19,14 @@ function [attackWave, synthTail, finalAudio, Fs] = processLASynth(wavFilePath, t
     tailDuration = 4.0;
     t = (0 : round(tailDuration * Fs) - 1) / Fs;
 
-    rawSynth = zeros(1, length(t));
-    for k = 1:6
-        amplitude = 1 / (k^1.5);
-        rawSynth = rawSynth + amplitude * sin(2 * pi * k * baseFreq * t);
-    end
+
+    k = (1:6)';
+
+
+    amplitudes = 1 ./ (k.^1.5);
+
+
+    rawSynth = sum(amplitudes .* sin(2 * pi * k * baseFreq * t), 1);
 
     envelope = generateADSR(A, D, S, R, length(t), Fs);
     synthTail = rawSynth .* envelope;
