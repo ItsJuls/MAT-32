@@ -7,29 +7,65 @@
 % 1. UI COMPONENTS TO BUILD:
 %    Drag and drop these into the app and name them exactly like this:
 %    - 3x UIAxes: app.TopUIAxes, app.MiddleUIAxes, app.BottomUIAxes
-%    - 3x Knobs:
-%        * app.SAMPLETRIMKnob (Range: 0.01 to 0.50, Default: 0.15)
-%        * app.BASEFREQHzKnob (Range: 20 to 1000, Default: 110)
-%        * app.LAMIXKnob      (Range: 0.0 to 2.0, Default: 1.0)
+%    - 6x Knobs:
+%        * app.SAMPLETRIMKnob   (Range: 0.01 to 0.50, Default: 0.15)
+%        * app.BASEFREQHzKnob   (Range: 20 to 1000, Default: 110)
+%        * app.LAMIXKnob        (Range: 0.0 to 2.0, Default: 1.0)
+%        * app.BRIGHTNESSKnob   (Range: 0.5 to 4.0, Default: 1.5)
+%        * app.CROSSFADEmsKnob  (Range: 1 to 100, Default: 20)
+%        * app.TAILLENKnob      (Range: 0.5 to 8.0, Default: 4.0)
 %    - 4x Vertical Sliders (ADSR):
 %        * app.ASlider (Range: 0.0 to 2.0, Default: 0.01)
 %        * app.DSlider (Range: 0.0 to 5.0, Default: 2.6)
 %        * app.SSlider (Range: 0.0 to 1.0, Default: 0.0)
 %        * app.RSlider (Range: 0.0 to 2.0, Default: 0.5)
+%    - 1x Button: Load .WAV...
 %    - 1x Button: Trigger Note
 %
-% 2. WHAT THIS FUNCTION RETURNS:
+% 2. WHAT EACH NEW KNOB DOES:
+%    - BRIGHTNESS  : controls how fast the harmonics roll off in the
+%                    synthesized tail. Lower = brighter/buzzier,
+%                    Higher = darker/warmer. (Was hardcoded as 1.5.)
+%    - CROSSFADE ms: length of the crossfade between the real attack
+%                    sample and the synthesized tail, in milliseconds.
+%                    Shorter = snappier transient, longer = smoother
+%                    blend. (Was hardcoded as 20ms / 0.02s.)
+%    - TAIL LENGTH : total duration in seconds of the synthesized tail
+%                    before the envelope cuts it off. (Was hardcoded
+%                    as 4.0 seconds.)
+%
+% 3. WHAT THIS FUNCTION RETURNS:
 %    When you call this function, it hands back 4 variables:
 %    - attackWave : The trimmed real audio (Plot this in TopUIAxes)
 %    - synthTail  : The math-generated ADSR wave (Plot this in MiddleUIAxes)
 %    - finalAudio : The combined crossfaded sound (Plot this in BottomUIAxes)
 %    - Fs         : The sample rate (Pass this into sound() so it plays)
 %
-% 3. THE CALLBACK CODE:
+% 4. THE "LOAD .WAV..." BUTTON CALLBACK:
+%    First, add a private property to store the loaded file path:
+%
+%    properties (Access = private)
+%        WavFilePath = '';
+%    end
+%
+%    Then right-click the "Load .WAV..." button, select Callbacks > Add,
+%    and paste this code inside the function it creates:
+%
+%    [file, path] = uigetfile({'*.wav', 'WAV Audio Files (*.wav)'}, 'Select a sample');
+%    if ~isequal(file, 0)
+%        app.WavFilePath = fullfile(path, file);
+%        app.LoadWAVButton.Text = file;
+%    end
+%
+% 5. THE "TRIGGER NOTE" BUTTON CALLBACK:
 %    Right-click your "Trigger Note" button, select Callbacks > Add,
 %    and paste this exact code inside the function it creates:
 %
-%    filePath = 'guitar_attack.wav';
+%    if isempty(app.WavFilePath)
+%        uialert(app.UIFigure, 'Please load a .wav file first.', 'No File Selected');
+%        return;
+%    end
+%
 %    trim = app.SAMPLETRIMKnob.Value;
 %    freq = app.BASEFREQHzKnob.Value;
 %    mix  = app.LAMIXKnob.Value;
@@ -39,7 +75,11 @@
 %    S = app.SSlider.Value;
 %    R = app.RSlider.Value;
 %
-%    [attack, tail, combined, Fs] = processLASynth(filePath, trim, freq, mix, A, D, S, R);
+%    brightness  = app.BRIGHTNESSKnob.Value;
+%    crossfadeMs = app.CROSSFADEmsKnob.Value;
+%    tailLen     = app.TAILLENKnob.Value;
+%
+%    [attack, tail, combined, Fs] = processLASynth(app.WavFilePath, trim, freq, mix, A, D, S, R, brightness, crossfadeMs, tailLen);
 %
 %    plot(app.TopUIAxes, attack);
 %    plot(app.MiddleUIAxes, tail);
@@ -48,13 +88,22 @@
 %
 % =========================================================================
 
-function [attackWave, synthTail, finalAudio, Fs] = processLASynth(wavFilePath, trimTime, baseFreq, laMixLevel, A, D, S, R)
+function [attackWave, synthTail, finalAudio, Fs] = processLASynth(wavFilePath, trimTime, baseFreq, laMixLevel, A, D, S, R, brightness, crossfadeMs, tailDuration)
 
     if nargin < 5
         A = 0.01;
         D = 2.60;
         S = 0.00;
         R = 0.50;
+    end
+    if nargin < 9
+        brightness = 1.5;   % default harmonic rolloff exponent
+    end
+    if nargin < 10
+        crossfadeMs = 20;   % default crossfade length in ms
+    end
+    if nargin < 11
+        tailDuration = 4.0; % default tail length in seconds
     end
 
     [rawSample, Fs] = audioread(wavFilePath);
@@ -66,29 +115,26 @@ function [attackWave, synthTail, finalAudio, Fs] = processLASynth(wavFilePath, t
     attackSamples = min(round(trimTime * Fs), length(rawSample));
     attackWave = rawSample(1:attackSamples);
 
-    tailDuration = 4.0;
     t = (0 : round(tailDuration * Fs) - 1) / Fs;
-
 
     k = (1:6)';
 
-
-    amplitudes = 1 ./ (k.^1.5);
-
+    amplitudes = 1 ./ (k.^brightness);   % was hardcoded 1.5, now a knob
 
     rawSynth = sum(amplitudes .* sin(2 * pi * k * baseFreq * t), 1);
 
     envelope = generateADSR(A, D, S, R, length(t), Fs);
     synthTail = rawSynth .* envelope;
 
-    tailStartLevel = max(abs(attackWave(end-50:end)));
+    tailWindow = min(50, length(attackWave)-1);
+    tailStartLevel = max(abs(attackWave(end-tailWindow:end)));
 
     maxTail = max(abs(synthTail));
     if maxTail > 0
         synthTail = synthTail * (tailStartLevel / maxTail) * laMixLevel;
     end
 
-    crossfadeTime = 0.02;
+    crossfadeTime = crossfadeMs / 1000;   % was hardcoded 0.02, now a knob
     xfadeSamples = round(crossfadeTime * Fs);
 
     totalLength = length(attackWave) + length(synthTail) - xfadeSamples;
